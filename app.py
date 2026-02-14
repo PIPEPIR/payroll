@@ -2,14 +2,32 @@ import streamlit as st
 import pandas as pd
 import io
 import math
+from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+from openpyxl.utils import get_column_letter
 
 st.set_page_config(page_title="ระบบคิดเงินเดือนร้านอาหาร", page_icon="📝")
 
 st.title("📝 ระบบคิดเงินเดือน")
 st.write("เริ่มกะ 14.00 น. | สายไม่เกิน 14.30 หักนาทีละ 5 ฿ | สายเกิน 14.30 หักนาทีละ 10 ฿")
 
+# --- ส่วนการตั้งค่าและอัปโหลดไฟล์ ---
+if 'uploader_key' not in st.session_state:
+    st.session_state.uploader_key = 0
+
+def clear_files():
+    st.session_state.uploader_key += 1
+
 hourly_rate = st.number_input("เรทค่าจ้างต่อชั่วโมง (บาท):", min_value=1, value=50, step=5)
-uploaded_files = st.file_uploader("อัปโหลดไฟล์ Excel ของพนักงาน", type=["xlsx"], accept_multiple_files=True)
+
+uploaded_files = st.file_uploader(
+    "อัปโหลดไฟล์ Excel ของพนักงาน", 
+    type=["xlsx"], 
+    accept_multiple_files=True,
+    key=f"uploader_{st.session_state.uploader_key}"
+)
+
+if st.button("🗑️ ล้างไฟล์ที่เลือกทั้งหมด", on_click=clear_files):
+    pass
 
 if uploaded_files:
     all_employees_summary = [] 
@@ -110,3 +128,69 @@ if uploaded_files:
         
         grand_total = summary_df['รับเงินสุทธิ (บาท)'].sum()
         st.metric("ยอดเงินรวมที่ร้านต้องโอนจ่าย (บาท)", f"฿{grand_total:,.2f}")
+
+        # ==========================================
+        # ฟีเจอร์ Export เป็น Excel แบบจัดรูปแบบสวยงาม
+        # ==========================================
+        def to_excel(df):
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, sheet_name='สรุปยอดจ่ายเงิน')
+                
+                # เข้าถึง workbook และ worksheet
+                workbook = writer.book
+                worksheet = writer.sheets['สรุปยอดจ่ายเงิน']
+
+                # --- 1. กำหนดสไตล์ ---
+                header_fill = PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid")
+                header_font = Font(bold=True, color="FFFFFF", size=12)
+                alignment_center = Alignment(horizontal="center", vertical="center")
+                border_thin = Border(
+                    left=Side(style='thin'), 
+                    right=Side(style='thin'), 
+                    top=Side(style='thin'), 
+                    bottom=Side(style='thin')
+                )
+
+                # --- 2. จัดรูปแบบ Header ---
+                for col_num, column_title in enumerate(df.columns, 1):
+                    cell = worksheet.cell(row=1, column=col_num)
+                    cell.fill = header_fill
+                    cell.font = header_font
+                    cell.alignment = alignment_center
+                    cell.border = border_thin
+
+                # --- 3. ปรับความกว้างคอลัมน์อัตโนมัติและใส่เส้นขอบ ---
+                for col_num, column_title in enumerate(df.columns, 1):
+                    max_length = 0
+                    column_letter = get_column_letter(col_num)
+                    
+                    # คำนวณความยาวสูงสุดในคอลัมน์นั้นๆ
+                    column_cells = worksheet[column_letter]
+                    for cell in column_cells:
+                        try:
+                            if len(str(cell.value)) > max_length:
+                                max_length = len(str(cell.value))
+                        except:
+                            pass
+                        
+                        # ใส่เส้นขอบทุกเซลล์
+                        cell.border = border_thin
+                        # ถ้าเป็นตัวเลข ให้จัดกลาง (ยกเว้นชื่อพนักงาน)
+                        if col_num > 1:
+                            cell.alignment = alignment_center
+
+                    adjusted_width = (max_length + 5)
+                    worksheet.column_dimensions[column_letter].width = adjusted_width
+
+            processed_data = output.getvalue()
+            return processed_data
+
+        excel_data = to_excel(summary_df)
+        
+        st.download_button(
+            label="📥 ดาวน์โหลดสรุปยอดเงินทั้งหมด (Excel)",
+            data=excel_data,
+            file_name=f"payroll_summary_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
